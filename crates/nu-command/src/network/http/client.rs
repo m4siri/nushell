@@ -38,9 +38,11 @@ use std::{
 };
 use ureq::{
     Agent, Body, Error, RequestBuilder, ResponseExt, SendBody,
+    Proxy, ProxyBuilder, ProxyProtocol,
     typestate::{WithBody, WithoutBody},
     unversioned::transport::{ConnectProxyConnector, Connector, SocksConnector},
 };
+use std::convert::TryInto;
 use url::Url;
 
 #[cfg(feature = "native-tls")]
@@ -208,7 +210,8 @@ pub fn http_client(
     }
 
     if let Some(http_proxy) = retrieve_http_proxy_from_env(engine_state, stack)
-        && let Ok(proxy) = ureq::Proxy::new(&http_proxy)
+        && let Some(proxy) = proxy_builder_from_env(http_proxy, engine_state, stack)
+            .and_then(|builder| builder.build().ok())
     {
         config_builder = config_builder.proxy(Some(proxy));
     };
@@ -1266,9 +1269,81 @@ fn retrieve_http_proxy_from_env(engine_state: &EngineState, stack: &mut Stack) -
         .and_then(|proxy| proxy.coerce_into_string().ok())
 }
 
+fn proxy_builder_from_env(http_proxy: String, engine_state: &EngineState, stack: &mut Stack) -> Option<ProxyBuilder> {
+
+    let uri  = http_proxy.parse::<http::Uri>().ok()?;
+    let authority = uri.authority()?;
+    let scheme = uri.scheme_str().unwrap_or("http");
+    let proto: ProxyProtocol= scheme.try_into().ok()?;
+
+    let mut builder = Proxy::builder(proto)
+                        .host(authority.host());
+
+    if let Some(port) = uri.port() {
+        builder = builder.port(port.as_u16());
+    }
+
+    let (username, password) = retrieve_credential_from_authority(authority);
+    if let Some(username) = username {
+        builder = builder.username(username);
+        if let Some(password) = password {
+            builder = builder.password(password);
+        }
+    }
+
+    if let Some(val) = stack
+        .get_env_var(engine_state, "no_proxy")
+        .or(stack.get_env_var(engine_state, "NO_PROXY"))
+    {
+        if let Ok(no_proxy) = val.as_str() {
+            for proxy in no_proxy.split(',') {
+                builder = builder.no_proxy(proxy.trim());
+            }
+        }
+    }
+
+    Some(builder)
+}
+
+fn retrieve_credential_from_authority(authority: &http::uri::Authority) -> (Option<&str>, Option<&str>) {
+    let s = authority.as_str();
+    let user_info = s.rfind('@').map(|i| &s[..i]);
+    let username = user_info.map(|a| a.rfind(':').map(|i| &a[..i]).unwrap_or(a));
+    let password =  user_info.and_then(|a| a.rfind(':').map(|i| &a[i + 1..]));
+    (username, password)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+
+    #[test]
+    fn test_retrieving_credentials_from_authority() {
+        // user and password
+        let uri = "http://user:pass@host/path".parse::<http::Uri>().unwrap();
+        let authority = uri.authority().unwrap();
+        let (user, pass) = retrieve_credential_from_authority(authority);
+        assert_eq!((user, pass), (Some("user"), Some("pass")));
+
+        // user and empty password
+        let uri = "http://user:@host/path".parse::<http::Uri>().unwrap();
+        let authority = uri.authority().unwrap();
+        let (user, pass) = retrieve_credential_from_authority(authority);
+        assert_eq!((user, pass), (Some("user"), Some("")));
+
+        // user only, no password
+        let uri = "http://user@host/path".parse::<http::Uri>().unwrap();
+        let authority = uri.authority().unwrap();
+        let (user, pass) = retrieve_credential_from_authority(authority);
+        assert_eq!((user, pass), (Some("user"), None));
+
+        // no user, no password
+        let uri = "http://host/path".parse::<http::Uri>().unwrap();
+        let authority = uri.authority().unwrap();
+        let (user, pass) = retrieve_credential_from_authority(authority);
+        assert_eq!((user, pass), (None, None));
+    }
 
     #[test]
     fn test_body_type_from_content_type() {
