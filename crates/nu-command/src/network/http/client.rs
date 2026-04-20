@@ -1295,11 +1295,10 @@ fn proxy_builder_from_env(
     if let Some(val) = stack
         .get_env_var(engine_state, "no_proxy")
         .or(stack.get_env_var(engine_state, "NO_PROXY"))
+        && let Ok(no_proxy) = val.as_str()
     {
-        if let Ok(no_proxy) = val.as_str() {
-            for proxy in no_proxy.split(',') {
-                builder = builder.no_proxy(proxy.trim());
-            }
+        for proxy in no_proxy.split(',') {
+            builder = builder.no_proxy(proxy.trim());
         }
     }
 
