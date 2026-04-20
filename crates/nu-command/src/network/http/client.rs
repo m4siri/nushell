@@ -27,6 +27,7 @@ use nu_protocol::{
     },
 };
 use serde_json::Value as JsonValue;
+use std::convert::TryInto;
 use std::{
     collections::HashMap,
     io::{self, Cursor, Read},
@@ -37,12 +38,10 @@ use std::{
     time::Duration,
 };
 use ureq::{
-    Agent, Body, Error, RequestBuilder, ResponseExt, SendBody,
-    Proxy, ProxyBuilder, ProxyProtocol,
+    Agent, Body, Error, Proxy, ProxyBuilder, ProxyProtocol, RequestBuilder, ResponseExt, SendBody,
     typestate::{WithBody, WithoutBody},
     unversioned::transport::{ConnectProxyConnector, Connector, SocksConnector},
 };
-use std::convert::TryInto;
 use url::Url;
 
 #[cfg(feature = "native-tls")]
@@ -1269,15 +1268,17 @@ fn retrieve_http_proxy_from_env(engine_state: &EngineState, stack: &mut Stack) -
         .and_then(|proxy| proxy.coerce_into_string().ok())
 }
 
-fn proxy_builder_from_env(http_proxy: String, engine_state: &EngineState, stack: &mut Stack) -> Option<ProxyBuilder> {
-
-    let uri  = http_proxy.parse::<http::Uri>().ok()?;
+fn proxy_builder_from_env(
+    http_proxy: String,
+    engine_state: &EngineState,
+    stack: &mut Stack,
+) -> Option<ProxyBuilder> {
+    let uri = http_proxy.parse::<http::Uri>().ok()?;
     let authority = uri.authority()?;
     let scheme = uri.scheme_str().unwrap_or("http");
-    let proto: ProxyProtocol= scheme.try_into().ok()?;
+    let proto: ProxyProtocol = scheme.try_into().ok()?;
 
-    let mut builder = Proxy::builder(proto)
-                        .host(authority.host());
+    let mut builder = Proxy::builder(proto).host(authority.host());
 
     if let Some(port) = uri.port() {
         builder = builder.port(port.as_u16());
@@ -1305,18 +1306,19 @@ fn proxy_builder_from_env(http_proxy: String, engine_state: &EngineState, stack:
     Some(builder)
 }
 
-fn retrieve_credential_from_authority(authority: &http::uri::Authority) -> (Option<&str>, Option<&str>) {
+fn retrieve_credential_from_authority(
+    authority: &http::uri::Authority,
+) -> (Option<&str>, Option<&str>) {
     let s = authority.as_str();
     let user_info = s.rfind('@').map(|i| &s[..i]);
     let username = user_info.map(|a| a.rfind(':').map(|i| &a[..i]).unwrap_or(a));
-    let password =  user_info.and_then(|a| a.rfind(':').map(|i| &a[i + 1..]));
+    let password = user_info.and_then(|a| a.rfind(':').map(|i| &a[i + 1..]));
     (username, password)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-
 
     #[test]
     fn test_retrieving_credentials_from_authority() {
